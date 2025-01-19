@@ -1,0 +1,14 @@
+[package]
+name = "kanari-mail"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+axum = "0.8.1"
+tokio = { version = "1.43.0", features = ["full"] }
+serde = { version = "1.0.217", features = ["derive"] }
+lettre = { version = "0.11.11", features = ["tokio1", "tokio1-native-tls"] }
+
+# Database
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "time"] }
+dotenv = "0.15"
