@@ -1,25 +1,19 @@
-use axum::{
-    routing::post,
-    Router,
-    Json,
-    extract::State,
+use std::time::Duration;
+
+use axum::{Json, Router, extract::State, routing::post};
+use chrono::{DateTime, Utc};
+use dotenv::dotenv;
+use lettre::{
+    AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
+    transport::smtp::authentication::Credentials,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::{postgres::PgPoolOptions, PgPool};
-use lettre::{
-    Message,
-    transport::smtp::authentication::Credentials,
-    AsyncSmtpTransport,
-    AsyncTransport,
-    Tokio1Executor,
-};
-use chrono::{DateTime, Utc};
-
+use sqlx::{PgPool, postgres::PgPoolOptions};
 
 #[derive(Clone)]
 struct AppState {
+    db: PgPool,
     mailer: AsyncSmtpTransport<Tokio1Executor>,
-    db: PgPool
 }
 
 #[derive(sqlx::FromRow, Serialize)]
@@ -27,7 +21,7 @@ struct Subscriber {
     id: i32,
     email: String,
     created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>
+    updated_at: DateTime<Utc>,
 }
 
 #[derive(Deserialize)]
@@ -49,7 +43,7 @@ async fn create_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
             email VARCHAR(255) NOT NULL UNIQUE,
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-        );"#
+        );"#,
     )
     .execute(pool)
     .await?;
@@ -61,7 +55,7 @@ async fn subscribe(
     Json(request): Json<SubscribeRequest>,
 ) -> Json<SubscribeResponse> {
     let result = sqlx::query_as::<_, Subscriber>(
-        "INSERT INTO subscribers (email) VALUES ($1) RETURNING id, email, created_at, updated_at"
+        "INSERT INTO subscribers (email) VALUES ($1) RETURNING id, email, created_at, updated_at",
     )
     .bind(&request.email)
     .fetch_one(&state.db)
@@ -88,7 +82,7 @@ async fn subscribe(
             }
         }
         Err(e) => Json(SubscribeResponse {
-            success: false, 
+            success: false,
             message: format!("Failed to subscribe: {}", e),
         }),
     }
@@ -96,10 +90,11 @@ async fn subscribe(
 
 #[tokio::main]
 async fn main() {
+    dotenv().ok();
+
     // Initialize DB
-    let database_url = std::env::var("DATABASE_URL")
-        .expect("DATABASE_URL must be set");
-    
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+
     let db_pool = PgPoolOptions::new()
         .max_connections(5)
         .connect(&database_url)
@@ -107,22 +102,44 @@ async fn main() {
         .expect("Failed to create pool");
 
     // Create tables
-    create_tables(&db_pool).await.expect("Failed to create tables");
+    create_tables(&db_pool)
+        .await
+        .expect("Failed to create tables");
 
     // Initialize email client
-    let creds = Credentials::new(
-        "your-email@example.com".to_string(),
-        "your-password".to_string(),
-    );
+    let smtp_username = std::env::var("SMTP_USERNAME").expect("SMTP_USERNAME must be set");
+    let smtp_password = std::env::var("SMTP_PASSWORD").expect("SMTP_PASSWORD must be set");
+    let smtp_host = std::env::var("SMTP_HOST").expect("SMTP_HOST must be set");
+    let smtp_port = std::env::var("SMTP_PORT")
+        .expect("SMTP_PORT must be set")
+        .parse::<u16>()
+        .expect("SMTP_PORT must be a valid port number");
 
-    let mailer = AsyncSmtpTransport::<Tokio1Executor>::relay("smtp.gmail.com")
-        .unwrap()
-        .credentials(creds)
-        .build();
+    // Create credentials with proper authentication
+    let creds = Credentials::new(smtp_username.to_string(), smtp_password.to_string());
+    
+    let mailer = match AsyncSmtpTransport::<Tokio1Executor>::relay(&smtp_host) {
+        Ok(transport) => transport
+            .credentials(creds)
+            .port(smtp_port)
+            .timeout(Some(Duration::from_secs(10)))
+            .tls(lettre::transport::smtp::client::Tls::Required(
+                lettre::transport::smtp::client::TlsParameters::new(smtp_host.clone())
+                    .expect("Failed to create TLS parameters"),
+            ))
+            .build(),
+        Err(e) => {
+            eprintln!("Failed to create SMTP transport: {}", e);
+            std::process::exit(1);
+        }
+    };
+    
 
-    let app_state = AppState { 
-        mailer,
+
+
+    let app_state = AppState {
         db: db_pool,
+        mailer,
     };
 
     let app = Router::new()
