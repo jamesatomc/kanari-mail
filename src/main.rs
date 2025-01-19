@@ -5,6 +5,7 @@ use axum::{
     extract::State,
 };
 use serde::{Deserialize, Serialize};
+use sqlx::{postgres::PgPoolOptions, PgPool};
 use lettre::{
     Message,
     transport::smtp::authentication::Credentials,
@@ -12,53 +13,26 @@ use lettre::{
     AsyncTransport,
     Tokio1Executor,
 };
+use chrono::{DateTime, Utc};
 
-#[derive(Deserialize)]
-struct EmailRequest {
-    to: String,
-    subject: String,
-    body: String,
-}
-
-#[derive(Serialize)]
-struct EmailResponse {
-    success: bool,
-    message: String,
-}
 
 #[derive(Clone)]
 struct AppState {
     mailer: AsyncSmtpTransport<Tokio1Executor>,
+    db: PgPool
 }
 
-async fn send_email(
-    State(state): State<AppState>,
-    Json(request): Json<EmailRequest>,
-) -> Json<EmailResponse> {
-    let email = Message::builder()
-        .from("your-email@example.com".parse().unwrap())
-        .to(request.to.parse().unwrap())
-        .subject(request.subject)
-        .body(request.body)
-        .unwrap();
-
-    match state.mailer.send(email).await {
-        Ok(_) => Json(EmailResponse {
-            success: true,
-            message: "Email sent successfully".to_string(),
-        }),
-        Err(e) => Json(EmailResponse {
-            success: false,
-            message: format!("Failed to send email: {}", e),
-        }),
-    }
+#[derive(sqlx::FromRow, Serialize)]
+struct Subscriber {
+    id: i32,
+    email: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>
 }
-
 
 #[derive(Deserialize)]
 struct SubscribeRequest {
     email: String,
-    name: String,
 }
 
 #[derive(Serialize)]
@@ -67,24 +41,54 @@ struct SubscribeResponse {
     message: String,
 }
 
+async fn create_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS subscribers (
+            id SERIAL PRIMARY KEY,
+            email VARCHAR(255) NOT NULL UNIQUE,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );"#
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 async fn subscribe(
     State(state): State<AppState>,
     Json(request): Json<SubscribeRequest>,
 ) -> Json<SubscribeResponse> {
-    let confirmation_email = Message::builder()
-        .from("your-email@example.com".parse().unwrap())
-        .to(request.email.parse().unwrap())
-        .subject("Welcome to Our Newsletter!")
-        .body(format!("Hello {}, thank you for subscribing!", request.name))
-        .unwrap();
+    let result = sqlx::query_as::<_, Subscriber>(
+        "INSERT INTO subscribers (email) VALUES ($1) RETURNING id, email, created_at, updated_at"
+    )
+    .bind(&request.email)
+    .fetch_one(&state.db)
+    .await;
 
-    match state.mailer.send(confirmation_email).await {
-        Ok(_) => Json(SubscribeResponse {
-            success: true,
-            message: "Successfully subscribed to newsletter".to_string(),
-        }),
+    match result {
+        Ok(subscriber) => {
+            let confirmation_email = Message::builder()
+                .from("your-email@example.com".parse().unwrap())
+                .to(subscriber.email.parse().unwrap())
+                .subject("Welcome to Our Newsletter!")
+                .body("Thank you for subscribing to our newsletter!".to_string())
+                .unwrap();
+
+            match state.mailer.send(confirmation_email).await {
+                Ok(_) => Json(SubscribeResponse {
+                    success: true,
+                    message: "Successfully subscribed to newsletter".to_string(),
+                }),
+                Err(e) => Json(SubscribeResponse {
+                    success: false,
+                    message: format!("Failed to send welcome email: {}", e),
+                }),
+            }
+        }
         Err(e) => Json(SubscribeResponse {
-            success: false,
+            success: false, 
             message: format!("Failed to subscribe: {}", e),
         }),
     }
@@ -92,6 +96,20 @@ async fn subscribe(
 
 #[tokio::main]
 async fn main() {
+    // Initialize DB
+    let database_url = std::env::var("DATABASE_URL")
+        .expect("DATABASE_URL must be set");
+    
+    let db_pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("Failed to create pool");
+
+    // Create tables
+    create_tables(&db_pool).await.expect("Failed to create tables");
+
+    // Initialize email client
     let creds = Credentials::new(
         "your-email@example.com".to_string(),
         "your-password".to_string(),
@@ -102,10 +120,12 @@ async fn main() {
         .credentials(creds)
         .build();
 
-    let app_state = AppState { mailer };
+    let app_state = AppState { 
+        mailer,
+        db: db_pool,
+    };
 
     let app = Router::new()
-        .route("/send-email", post(send_email))
         .route("/subscribe", post(subscribe))
         .with_state(app_state);
 
