@@ -1,23 +1,18 @@
 use axum::{extract::State, response::IntoResponse, routing::{get, post}, Json, Router};
 use dotenv::dotenv;
 use hyper::StatusCode;
-use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, postgres::PgPoolOptions};
+use tower_http::trace::TraceLayer;
+mod models;
+use crate::models::email::{EmailList, Subscriber};
+
+
 
 #[derive(Clone)]
 struct AppState {
     db: PgPool,
 }
 
-#[derive(sqlx::FromRow, Serialize, Deserialize)]
-struct Subscriber {
-    email: String,
-}
-
-#[derive(Serialize)]
-struct EmailList {
-    emails: Vec<String>,
-}
 
 async fn create_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query(
@@ -93,6 +88,7 @@ async fn main() {
     let app = Router::new()
         .route("/subscribers", get(get_subscribers))
         .route("/subscribe", post(subscribe))
+        .layer(TraceLayer::new_for_http())
         .with_state(app_state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
