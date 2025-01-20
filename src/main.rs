@@ -1,4 +1,4 @@
-use axum::{routing::{get, post}, Router};
+use axum::{routing::{delete, get, post}, Router};
 use dotenv::dotenv;
 
 use sqlx::{PgPool, postgres::PgPoolOptions};
@@ -6,7 +6,7 @@ use sqlx::{PgPool, postgres::PgPoolOptions};
 mod models;
 mod routes;
 
-use routes::subscribers::{get_subscribers, subscribe};
+use routes::subscribers::{get_subscribers, subscribe, unsubscribe};
 
 
 
@@ -55,6 +55,7 @@ async fn main() {
     let app = Router::new()
         .route("/subscribers", get(get_subscribers))
         .route("/subscribe", post(subscribe))
+        .route("/unsubscribe", delete(unsubscribe))
         .with_state(app_state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();

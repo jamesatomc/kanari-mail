@@ -57,3 +57,42 @@ pub async fn subscribe(
         }
     }
 }
+
+
+pub async fn unsubscribe(
+    State(state): State<AppState>,
+    Json(subscriber): Json<Subscriber>,
+) -> impl IntoResponse {
+    match sqlx::query("DELETE FROM subscribers WHERE email = $1")
+        .bind(&subscriber.email)
+        .execute(&state.db)
+        .await
+    {
+        Ok(result) => {
+            if result.rows_affected() == 0 {
+                let response = ApiResponse {
+                    success: false,
+                    message: "Email not found".to_string(),
+                    data: None,
+                };
+                (StatusCode::NOT_FOUND, Json(response))
+            } else {
+                let response = ApiResponse {
+                    success: true,
+                    message: "Unsubscribed successfully".to_string(),
+                    data: Some(subscriber),
+                };
+                (StatusCode::OK, Json(response))
+            }
+        }
+        Err(e) => {
+            eprintln!("Error removing subscriber: {:?}", e);
+            let response = ApiResponse {
+                success: false,
+                message: "Failed to unsubscribe".to_string(),
+                data: None,
+            };
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(response))
+        }
+    }
+}
