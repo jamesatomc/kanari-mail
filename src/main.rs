@@ -1,18 +1,19 @@
-use axum::{extract::State, response::IntoResponse, routing::{get, post}, Json, Router};
+use axum::{routing::{get, post}, Router};
 use dotenv::dotenv;
-use hyper::StatusCode;
+
 use sqlx::{PgPool, postgres::PgPoolOptions};
-use tower_http::trace::TraceLayer;
+
 mod models;
-use crate::models::email::{EmailList, Subscriber};
+mod routes;
+
+use routes::subscribers::{get_subscribers, subscribe};
 
 
 
 #[derive(Clone)]
-struct AppState {
+pub struct AppState {
     db: PgPool,
 }
-
 
 async fn create_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query(
@@ -29,41 +30,7 @@ async fn create_tables(pool: &PgPool) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
-async fn get_subscribers(State(state): State<AppState>) -> impl IntoResponse {
-    match sqlx::query_as::<_, (String,)>("SELECT email FROM subscribers")
-        .fetch_all(&state.db)
-        .await
-    {
-        Ok(rows) => {
-            let emails = rows.into_iter().map(|r| r.0).collect();
-            (StatusCode::OK, Json(EmailList { emails }))
-        }
-        Err(e) => {
-            eprintln!("Error fetching subscribers: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(EmailList { emails: vec![] }),
-            )
-        }
-    }
-}
 
-async fn subscribe(
-    State(state): State<AppState>,
-    Json(subscriber): Json<Subscriber>,
-) -> impl IntoResponse {
-    match sqlx::query("INSERT INTO subscribers (email) VALUES ($1)")
-        .bind(&subscriber.email)
-        .execute(&state.db)
-        .await
-    {
-        Ok(_) => (StatusCode::CREATED, Json(())),
-        Err(e) => {
-            eprintln!("Error inserting subscriber: {:?}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(()))
-        }
-    }
-}
 
 #[tokio::main]
 async fn main() {
@@ -78,6 +45,7 @@ async fn main() {
         .await
         .expect("Failed to create pool");
 
+        
     // Create tables
     create_tables(&db_pool)
         .await
@@ -88,7 +56,6 @@ async fn main() {
     let app = Router::new()
         .route("/subscribers", get(get_subscribers))
         .route("/subscribe", post(subscribe))
-        .layer(TraceLayer::new_for_http())
         .with_state(app_state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
