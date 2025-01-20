@@ -9,7 +9,6 @@ mod routes;
 use routes::subscribers::{get_subscribers, subscribe, unsubscribe};
 
 
-
 #[derive(Clone)]
 pub struct AppState {
     db: PgPool,
@@ -61,6 +60,4 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     println!("Server running on http://localhost:3000");
     axum::serve(listener, app).await.unwrap();
-
-    
 }
