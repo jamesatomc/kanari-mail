@@ -19,7 +19,6 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 #[macro_use]
 mod models;
 mod routes;
-
 use routes::subscribers::{get_subscribers, subscribe, unsubscribe};
 
 
